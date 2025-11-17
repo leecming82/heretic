@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) 2025  Philipp Emanuel Weidmann <pew@worldwidemann.com>
 
+import csv
 import math
 import sys
 import time
@@ -28,6 +29,8 @@ from optuna.samplers import TPESampler
 from optuna.study import StudyDirection
 from pydantic import ValidationError
 from questionary import Choice, Style
+from rich.columns import Columns
+from rich.panel import Panel
 from rich.traceback import install
 
 from .config import Settings
@@ -373,6 +376,7 @@ def run():
                     "Save the model to a local folder",
                     "Upload the model to Hugging Face",
                     "Chat with the model",
+                    "Export evaluation responses to CSV",
                     "Nothing (return to trial selection menu)",
                 ],
                 style=Style([("highlighted", "reverse")]),
@@ -472,10 +476,18 @@ def run():
                         print(
                             "[cyan]Press Ctrl+C at any time to return to the menu.[/]"
                         )
+                        print(
+                            "[cyan]Each turn displays both the unmodified and abliterated model responses for comparison.[/]"
+                        )
 
-                        chat = [
+                        abliterated_chat = [
                             {"role": "system", "content": settings.system_prompt},
                         ]
+                        original_chat = [
+                            {"role": "system", "content": settings.system_prompt},
+                        ]
+                        chat_direction_index = trial.user_attrs["direction_index"]
+                        chat_parameters = trial.user_attrs["parameters"]
 
                         while True:
                             try:
@@ -485,14 +497,107 @@ def run():
                                 ).unsafe_ask()
                                 if not message:
                                     break
-                                chat.append({"role": "user", "content": message})
+                                abliterated_chat.append(
+                                    {"role": "user", "content": message}
+                                )
+                                original_chat.append({"role": "user", "content": message})
 
-                                print("[bold]Assistant:[/] ", end="")
-                                response = model.stream_chat_response(chat)
-                                chat.append({"role": "assistant", "content": response})
+                                print()
+                                print("[grey50]Generating responses...[/]")
+                                model.reload_model()
+                                original_response = model.get_chat_response(original_chat)
+                                original_chat.append(
+                                    {"role": "assistant", "content": original_response}
+                                )
+
+                                model.abliterate(
+                                    refusal_directions,
+                                    chat_direction_index,
+                                    chat_parameters,
+                                )
+                                abliterated_response = model.get_chat_response(
+                                    abliterated_chat
+                                )
+                                abliterated_chat.append(
+                                    {"role": "assistant", "content": abliterated_response}
+                                )
+
+                                panels = [
+                                    Panel(
+                                        original_response.strip()
+                                        or "[dim]No output[/]",
+                                        title="Unmodified model",
+                                        border_style="yellow",
+                                    ),
+                                    Panel(
+                                        abliterated_response.strip()
+                                        or "[dim]No output[/]",
+                                        title="Abliterated model",
+                                        border_style="green",
+                                    ),
+                                ]
+                                print()
+                                print(Columns(panels))
                             except (KeyboardInterrupt, EOFError):
                                 # Ctrl+C/Ctrl+D
                                 break
+
+                        # Ensure the selected trial remains active for subsequent actions.
+                        model.reload_model()
+                        model.abliterate(
+                            refusal_directions,
+                            chat_direction_index,
+                            chat_parameters,
+                        )
+
+                    case "Export evaluation responses to CSV":
+                        csv_path = questionary.path(
+                            "Path to CSV file:", default="evaluation_responses.csv"
+                        ).ask()
+                        if not csv_path:
+                            continue
+
+                        prompts = evaluator.good_prompts
+                        if not prompts:
+                            print("[yellow]No evaluation prompts available.[/]")
+                            continue
+
+                        csv_path = Path(csv_path).expanduser()
+                        print(
+                            f"Generating responses for [bold]{len(prompts)}[/] good evaluation prompts..."
+                        )
+                        print("* Getting baseline responses...")
+                        model.reload_model()
+                        baseline_responses = model.get_responses_batched(prompts)
+
+                        print("* Getting abliterated responses...")
+                        model.abliterate(
+                            refusal_directions,
+                            trial.user_attrs["direction_index"],
+                            trial.user_attrs["parameters"],
+                        )
+                        abliterated_responses = model.get_responses_batched(prompts)
+
+                        print(f"* Writing CSV to [bold]{csv_path}[/]...")
+                        csv_path.parent.mkdir(parents=True, exist_ok=True)
+                        with csv_path.open("w", newline="", encoding="utf-8") as file:
+                            writer = csv.writer(file)
+                            writer.writerow(
+                                ["prompt", "baseline_response", "abliterated_response"]
+                            )
+                            for prompt, baseline, abliterated in zip(
+                                prompts, baseline_responses, abliterated_responses
+                            ):
+                                writer.writerow([prompt, baseline, abliterated])
+                        print("Responses saved.")
+
+                        # Restore abliterated model for further actions.
+                        model.reload_model()
+                        model.abliterate(
+                            refusal_directions,
+                            trial.user_attrs["direction_index"],
+                            trial.user_attrs["parameters"],
+                        )
 
             except Exception as error:
                 print(f"[red]Error: {error}[/]")
