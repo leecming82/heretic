@@ -26,6 +26,7 @@ dependencies = [
     "datasets>=4.0.0",
     "hf-transfer>=0.1.9",
     "huggingface-hub>=0.34.4",
+    "openai>=1.0.0",
     "optuna>=4.5.0",
     "pydantic-settings>=2.10.1",
     "questionary>=2.1.1",

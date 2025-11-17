@@ -72,6 +72,40 @@ After Heretic has finished decensoring a model, you are given the option to
 save the model, upload it to Hugging Face, chat with it to test how well it works,
 or any combination of those actions.
 
+### Generating custom bad-prompt datasets
+
+If you prefer not to use the default Hugging Face datasets, the repository now
+includes a helper script that builds a local dataset of "bad" prompts using
+OpenRouter:
+
+```
+OPENROUTER_API_KEY=... python scripts/generate_bad_prompts.py \
+  --output-dir data/generated_bad_prompts \
+  --total-prompts 1000 \
+  --concurrency 6
+```
+
+The script queries `x-ai/grok-4-fast` (override with `--model`) using the OpenAI
+v1 client and stores two files, `train.jsonl` and `test.jsonl`, inside the output
+directory. Use `--concurrency` to control how many requests run in parallel.
+You can then point any of the prompt-related configuration blocks at the newly
+created dataset:
+
+```toml
+[bad_prompts]
+dataset = "data/generated_bad_prompts"
+split = "train[:400]"
+column = "prompt"
+
+[bad_evaluation_prompts]
+dataset = "data/generated_bad_prompts"
+split = "test[:100]"
+column = "prompt"
+```
+
+Local datasets understand numeric slice syntax such as `train[:400]`, just like
+the default Hugging Face datasets.
+
 
 ## How it works
 
