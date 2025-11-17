@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from torch import LongTensor, Tensor
 from torch.nn import ModuleList
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     BatchEncoding,
@@ -18,6 +19,11 @@ from transformers import (
     TextStreamer,
 )
 from transformers.generation.utils import GenerateOutput
+
+try:
+    from transformers import Qwen3VLForConditionalGeneration
+except ImportError:  # pragma: no cover - older Transformers versions
+    Qwen3VLForConditionalGeneration = None
 
 from .config import Settings
 from .utils import batchify, empty_cache, print
@@ -38,14 +44,11 @@ class Model:
         print()
         print(f"Loading model [bold]{settings.model}[/]...")
 
-        self.tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(
-            settings.model
-        )
+        self._current_model_id = settings.model
+        self._model_config = AutoConfig.from_pretrained(self._current_model_id)
+        self._vision_language_model = self._model_config.model_type == "qwen3_vl"
 
-        # Fallback for tokenizers that don't declare a special pad token.
-        if self.tokenizer.pad_token is None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.tokenizer.padding_side = "left"
+        self.tokenizer: PreTrainedTokenizerBase = self._create_tokenizer()
 
         self.model = None
 
@@ -53,11 +56,7 @@ class Model:
             print(f"* Trying dtype [bold]{dtype}[/]... ", end="")
 
             try:
-                self.model = AutoModelForCausalLM.from_pretrained(
-                    settings.model,
-                    dtype=dtype,
-                    device_map=settings.device_map,
-                )
+                self.model = self._load_model(dtype)
 
                 # A test run can reveal dtype-related problems such as the infamous
                 # "RuntimeError: probability tensor contains either `inf`, `nan` or element < 0"
@@ -85,15 +84,54 @@ class Model:
     def reload_model(self):
         dtype = self.model.dtype
 
+        if self._current_model_id != self.settings.model:
+            self._current_model_id = self.settings.model
+            self._model_config = AutoConfig.from_pretrained(self._current_model_id)
+            self._vision_language_model = (
+                self._model_config.model_type == "qwen3_vl"
+            )
+            self.tokenizer = self._create_tokenizer()
+
         # Purge existing model object from memory to make space.
         self.model = None
         empty_cache()
 
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.settings.model,
-            dtype=dtype,
-            device_map=self.settings.device_map,
+        self.model = self._load_model(dtype)
+
+    def _load_model(self, dtype: torch.dtype):
+        common_kwargs = {
+            "dtype": dtype,
+            "device_map": self.settings.device_map,
+        }
+
+        if self._vision_language_model:
+            if Qwen3VLForConditionalGeneration is None:
+                raise ImportError(
+                    "transformers does not provide Qwen3VLForConditionalGeneration. "
+                    "Upgrade transformers to a version that supports Qwen3-VL models."
+                )
+
+            return Qwen3VLForConditionalGeneration.from_pretrained(
+                self._current_model_id,
+                **common_kwargs,
+            )
+
+        return AutoModelForCausalLM.from_pretrained(
+            self._current_model_id,
+            **common_kwargs,
         )
+
+    def _create_tokenizer(self) -> PreTrainedTokenizerBase:
+        tokenizer: PreTrainedTokenizerBase = AutoTokenizer.from_pretrained(
+            self._current_model_id
+        )
+
+        # Fallback for tokenizers that don't declare a special pad token.
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            tokenizer.padding_side = "left"
+
+        return tokenizer
 
     def get_layers(self) -> ModuleList:
         # Most multimodal models.

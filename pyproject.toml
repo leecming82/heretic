@@ -30,7 +30,7 @@ dependencies = [
     "pydantic-settings>=2.10.1",
     "questionary>=2.1.1",
     "rich>=14.1.0",
-    "transformers>=4.55.2",
+    "transformers>=4.57.1",
 ]
 
 [project.urls]
