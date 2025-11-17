@@ -346,6 +346,57 @@ def run():
         )
     )
 
+    def export_evaluation_responses(
+        prompts: list[str],
+        prompt_label: str,
+        default_csv_name: str,
+    ) -> None:
+        csv_path = questionary.path(
+            "Path to CSV file:",
+            default=default_csv_name,
+        ).ask()
+        if not csv_path:
+            return
+
+        if not prompts:
+            print(f"[yellow]No {prompt_label} available.[/]")
+            return
+
+        csv_path = Path(csv_path).expanduser()
+        print(
+            f"Generating responses for [bold]{len(prompts)}[/] {prompt_label}..."
+        )
+        print("* Getting baseline responses...")
+        model.reload_model()
+        baseline_responses = model.get_responses_batched(prompts)
+
+        print("* Getting abliterated responses...")
+        model.abliterate(
+            refusal_directions,
+            trial.user_attrs["direction_index"],
+            trial.user_attrs["parameters"],
+        )
+        abliterated_responses = model.get_responses_batched(prompts)
+
+        print(f"* Writing CSV to [bold]{csv_path}[/]...")
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", newline="", encoding="utf-8") as file:
+            writer = csv.writer(file)
+            writer.writerow(["prompt", "baseline_response", "abliterated_response"])
+            for prompt, baseline, abliterated in zip(
+                prompts, baseline_responses, abliterated_responses
+            ):
+                writer.writerow([prompt, baseline, abliterated])
+        print("Responses saved.")
+
+        # Restore abliterated model for further actions.
+        model.reload_model()
+        model.abliterate(
+            refusal_directions,
+            trial.user_attrs["direction_index"],
+            trial.user_attrs["parameters"],
+        )
+
     while True:
         print()
         trial = questionary.select(
@@ -376,7 +427,8 @@ def run():
                     "Save the model to a local folder",
                     "Upload the model to Hugging Face",
                     "Chat with the model",
-                    "Export evaluation responses to CSV",
+                    "Export good evaluation responses to CSV",
+                    "Export bad evaluation responses to CSV",
                     "Nothing (return to trial selection menu)",
                 ],
                 style=Style([("highlighted", "reverse")]),
@@ -551,52 +603,17 @@ def run():
                         )
 
                     case "Export evaluation responses to CSV":
-                        csv_path = questionary.path(
-                            "Path to CSV file:", default="evaluation_responses.csv"
-                        ).ask()
-                        if not csv_path:
-                            continue
-
-                        prompts = evaluator.good_prompts
-                        if not prompts:
-                            print("[yellow]No evaluation prompts available.[/]")
-                            continue
-
-                        csv_path = Path(csv_path).expanduser()
-                        print(
-                            f"Generating responses for [bold]{len(prompts)}[/] good evaluation prompts..."
+                        export_evaluation_responses(
+                            evaluator.good_prompts,
+                            "good evaluation prompts",
+                            "evaluation_responses.csv",
                         )
-                        print("* Getting baseline responses...")
-                        model.reload_model()
-                        baseline_responses = model.get_responses_batched(prompts)
 
-                        print("* Getting abliterated responses...")
-                        model.abliterate(
-                            refusal_directions,
-                            trial.user_attrs["direction_index"],
-                            trial.user_attrs["parameters"],
-                        )
-                        abliterated_responses = model.get_responses_batched(prompts)
-
-                        print(f"* Writing CSV to [bold]{csv_path}[/]...")
-                        csv_path.parent.mkdir(parents=True, exist_ok=True)
-                        with csv_path.open("w", newline="", encoding="utf-8") as file:
-                            writer = csv.writer(file)
-                            writer.writerow(
-                                ["prompt", "baseline_response", "abliterated_response"]
-                            )
-                            for prompt, baseline, abliterated in zip(
-                                prompts, baseline_responses, abliterated_responses
-                            ):
-                                writer.writerow([prompt, baseline, abliterated])
-                        print("Responses saved.")
-
-                        # Restore abliterated model for further actions.
-                        model.reload_model()
-                        model.abliterate(
-                            refusal_directions,
-                            trial.user_attrs["direction_index"],
-                            trial.user_attrs["parameters"],
+                    case "Export bad evaluation responses to CSV":
+                        export_evaluation_responses(
+                            evaluator.bad_prompts,
+                            "bad evaluation prompts",
+                            "bad_evaluation_responses.csv",
                         )
 
             except Exception as error:
