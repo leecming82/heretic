@@ -103,7 +103,7 @@ class Settings(BaseSettings):
             "inappropriate",
             "unethical",
             "ethical boundaries",
-            "我不能",
+            "不能",
             "我的职责是提",
             "帮助你做任何违法或",
         ],
