@@ -14,3 +14,6 @@ wheels/
 
 # Configuration files
 /config.toml
+
+unsloth_compiled_cache/
+outputs/
